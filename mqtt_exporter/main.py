@@ -7,11 +7,33 @@ import logging
 import re
 import signal
 import sys
+import time
+
+def current_milli_time():
+    return round(time.time() * 1000)
 
 import paho.mqtt.client as mqtt
 from prometheus_client import Counter, Gauge, start_http_server
 
 from mqtt_exporter import settings
+
+class TimestampedGauge(Gauge):
+
+    def __init__(self, *args, timestamp=current_milli_time(), **kwargs):
+        self._timestamp = timestamp
+        super().__init__(*args, **kwargs)
+
+    def collect(self):
+        metrics = super().collect()
+        for metric in metrics:
+            metric.samples = [ 
+                type(sample)(sample.name, sample.labels, sample.value, self._timestamp, sample.exemplar)
+                for sample in metric.samples
+            ]
+        return metrics
+    def updateTime(self):
+        self._timestamp = current_milli_time()
+
 
 logging.basicConfig(level=settings.LOG_LEVEL)
 LOG = logging.getLogger("mqtt-exporter")
@@ -68,7 +90,7 @@ def _create_prometheus_metric(prom_metric_name):
         if settings.MQTT_EXPOSE_CLIENT_ID:
             labels.append("client_id")
 
-        prom_metrics[prom_metric_name] = Gauge(
+        prom_metrics[prom_metric_name] = TimestampedGauge(
             prom_metric_name, "metric generated from MQTT message.", labels
         )
         LOG.info("creating prometheus metric: %s", prom_metric_name)
@@ -80,6 +102,8 @@ def _add_prometheus_sample(topic, prom_metric_name, metric_value, client_id):
         labels["client_id"] = client_id
 
     prom_metrics[prom_metric_name].labels(**labels).set(metric_value)
+    prom_metrics[prom_metric_name].updateTime()
+
     LOG.debug("new value for %s: %s", prom_metric_name, metric_value)
 
 
